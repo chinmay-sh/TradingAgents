@@ -83,8 +83,8 @@ jobs:
           ALPHA_VANTAGE_API_KEY:           ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           FRED_API_KEY:                    ${{ secrets.FRED_API_KEY }}
           GOOGLE_API_KEY:                  ${{ secrets.GOOGLE_API_KEY }}
-          TRADINGAGENTS_MAX_DEBATE_ROUNDS: '3'
-          TRADINGAGENTS_MAX_RISK_ROUNDS:   '3'
+          TRADINGAGENTS_MAX_DEBATE_ROUNDS: '2'
+          TRADINGAGENTS_MAX_RISK_ROUNDS:   '2'
           TRADINGAGENTS_CHECKPOINT_ENABLED: 'false'
           TRADINGAGENTS_RESULTS_DIR:       ${{ github.workspace }}/results
         run: |
