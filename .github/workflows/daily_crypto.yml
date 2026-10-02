@@ -1,0 +1,119 @@
+name: Daily Crypto Analysis
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trigger 1 (primary): cron-job.org POSTs to the GitHub workflow_dispatch API.
+#   This fires at EXACTLY the time you configure in cron-job.org, unlike the
+#   built-in GitHub schedule which can be delayed 15–60 min on busy days.
+#
+# Trigger 2 (fallback): GitHub own scheduler at 3:30 UTC (9:00 AM IST).
+#   Catches the day if cron-job.org misses for any reason.
+#
+# Manual trigger: Actions tab > "Run workflow" > fill in ticker/date.
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: 'Ticker symbol to analyze (e.g. BTC-USD, ETH-USD)'
+        required: false
+        default: 'BTC-USD'
+      date:
+        description: 'Analysis date YYYY-MM-DD (blank = today UTC)'
+        required: false
+        default: ''
+      analysts:
+        description: 'Comma-separated analysts (market,news,sentiment,fundamentals)'
+        required: false
+        default: 'market,news,sentiment'
+
+  # Fallback: fires at 03:30 UTC = 09:00 IST, weekdays
+  schedule:
+    - cron: '30 3 * * 1-5'
+
+# Only one run at a time. Queue rather than cancel in case of overlap.
+concurrency:
+  group: daily-crypto
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: Analyze ${{ inputs.ticker || 'BTC-USD' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: 'latest'
+
+      - name: Install dependencies
+        run: uv sync --no-dev
+
+      - name: Resolve run parameters
+        id: params
+        run: |
+          TICKER="${{ inputs.ticker }}"
+          TICKER="${TICKER:-BTC-USD}"
+          DATE="${{ inputs.date }}"
+          DATE="${DATE:-$(date -u +%Y-%m-%d)}"
+          ANALYSTS="${{ inputs.analysts }}"
+          ANALYSTS="${ANALYSTS:-market,news,sentiment}"
+          echo "ticker=$TICKER"     >> "$GITHUB_OUTPUT"
+          echo "date=$DATE"         >> "$GITHUB_OUTPUT"
+          echo "analysts=$ANALYSTS" >> "$GITHUB_OUTPUT"
+          echo "ticker=$TICKER  date=$DATE  analysts=$ANALYSTS"
+
+      - name: Run TradingAgents analysis
+        env:
+          OPENAI_COMPATIBLE_API_KEY:       ${{ secrets.OPENAI_COMPATIBLE_API_KEY }}
+          TRADINGAGENTS_LLM_PROVIDER:      ${{ secrets.TRADINGAGENTS_LLM_PROVIDER }}
+          TRADINGAGENTS_LLM_BACKEND_URL:   ${{ secrets.TRADINGAGENTS_LLM_BACKEND_URL }}
+          TRADINGAGENTS_DEEP_THINK_LLM:    ${{ secrets.TRADINGAGENTS_DEEP_THINK_LLM }}
+          TRADINGAGENTS_QUICK_THINK_LLM:   ${{ secrets.TRADINGAGENTS_QUICK_THINK_LLM }}
+          TRADINGAGENTS_OUTPUT_LANGUAGE:   ${{ secrets.TRADINGAGENTS_OUTPUT_LANGUAGE }}
+          ALPHA_VANTAGE_API_KEY:           ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          FRED_API_KEY:                    ${{ secrets.FRED_API_KEY }}
+          GOOGLE_API_KEY:                  ${{ secrets.GOOGLE_API_KEY }}
+          TRADINGAGENTS_MAX_DEBATE_ROUNDS: '1'
+          TRADINGAGENTS_MAX_RISK_ROUNDS:   '1'
+          TRADINGAGENTS_CHECKPOINT_ENABLED: 'false'
+          TRADINGAGENTS_RESULTS_DIR:       ${{ github.workspace }}/results
+        run: |
+          uv run tradingagents \
+            --ticker   "${{ steps.params.outputs.ticker }}" \
+            --date     "${{ steps.params.outputs.date }}" \
+            --analysts "${{ steps.params.outputs.analysts }}" \
+            --save \
+            --no-show
+
+      - name: Upload results to Backblaze B2
+        if: always()
+        env:
+          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET_NAME:     ${{ secrets.B2_BUCKET_NAME }}
+          B2_ENDPOINT_URL:    ${{ secrets.B2_ENDPOINT_URL }}
+        run: |
+          uv pip install boto3
+          uv run python scripts/upload_b2.py \
+            --results-dir "${{ github.workspace }}/results" \
+            --ticker      "${{ steps.params.outputs.ticker }}" \
+            --date        "${{ steps.params.outputs.date }}"
+
+      - name: Archive results as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tradingagents-${{ steps.params.outputs.ticker }}-${{ steps.params.outputs.date }}
+          path: results/
+          retention-days: 30
+          if-no-files-found: warn
